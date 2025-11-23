@@ -1,4 +1,7 @@
 .zig-cache
 zig-out
 
-*.md
+test_*.zig
+tls_reproduction.zig
+
+
