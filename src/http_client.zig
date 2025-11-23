@@ -55,16 +55,38 @@ pub const HttpClient = struct {
 
         // Decode client certificate and key if provided
         const client_cert_pem = if (options.client_certificate_data) |cert_b64| blk: {
-            const decoded_size = try std.base64.standard.Decoder.calcSizeForSlice(cert_b64);
+            // Strip whitespace from base64 data as kubeconfig may contain newlines
+            const stripped = try allocator.alloc(u8, cert_b64.len);
+            defer allocator.free(stripped);
+            var stripped_len: usize = 0;
+            for (cert_b64) |c| {
+                if (c != ' ' and c != '\t' and c != '\n' and c != '\r') {
+                    stripped[stripped_len] = c;
+                    stripped_len += 1;
+                }
+            }
+
+            const decoded_size = try std.base64.standard.Decoder.calcSizeForSlice(stripped[0..stripped_len]);
             const pem = try allocator.alloc(u8, decoded_size);
-            try std.base64.standard.Decoder.decode(pem, cert_b64);
+            try std.base64.standard.Decoder.decode(pem, stripped[0..stripped_len]);
             break :blk pem;
         } else null;
 
         const client_key_pem = if (options.client_key_data) |key_b64| blk: {
-            const decoded_size = try std.base64.standard.Decoder.calcSizeForSlice(key_b64);
+            // Strip whitespace from base64 data as kubeconfig may contain newlines
+            const stripped = try allocator.alloc(u8, key_b64.len);
+            defer allocator.free(stripped);
+            var stripped_len: usize = 0;
+            for (key_b64) |c| {
+                if (c != ' ' and c != '\t' and c != '\n' and c != '\r') {
+                    stripped[stripped_len] = c;
+                    stripped_len += 1;
+                }
+            }
+
+            const decoded_size = try std.base64.standard.Decoder.calcSizeForSlice(stripped[0..stripped_len]);
             const pem = try allocator.alloc(u8, decoded_size);
-            try std.base64.standard.Decoder.decode(pem, key_b64);
+            try std.base64.standard.Decoder.decode(pem, stripped[0..stripped_len]);
             break :blk pem;
         } else null;
 

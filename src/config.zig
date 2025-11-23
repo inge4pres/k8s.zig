@@ -40,6 +40,28 @@ pub const Config = struct {
         }
     }
 
+    /// Load configuration from a kubeconfig YAML file and use the current context
+    ///
+    /// This is the preferred method for loading standard kubeconfig files.
+    pub fn fromKubeconfigFile(allocator: std.mem.Allocator, path: []const u8) !Config {
+        var kubeconfig = try Kubeconfig.fromYamlFile(allocator, path);
+        defer kubeconfig.deinit();
+
+        return try fromKubeconfig(allocator, &kubeconfig, null);
+    }
+
+    /// Load configuration from a kubeconfig YAML file with a specific context
+    pub fn fromKubeconfigFileWithContext(
+        allocator: std.mem.Allocator,
+        path: []const u8,
+        context_name: []const u8,
+    ) !Config {
+        var kubeconfig = try Kubeconfig.fromYamlFile(allocator, path);
+        defer kubeconfig.deinit();
+
+        return try fromKubeconfig(allocator, &kubeconfig, context_name);
+    }
+
     /// Load configuration from a kubeconfig JSON file and use the current context
     ///
     /// Note: Expects JSON format. Convert YAML to JSON using:

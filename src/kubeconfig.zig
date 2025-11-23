@@ -1,10 +1,10 @@
 const std = @import("std");
+const yaml = @import("yaml");
 
 /// Kubeconfig parser for loading Kubernetes cluster configuration
 ///
 /// Supports loading configuration from kubeconfig files, typically located at ~/.kube/config.
-/// This implementation supports JSON format kubeconfig files, which can be generated from
-/// YAML using: kubectl config view --flatten -o json
+/// This implementation supports both YAML and JSON format kubeconfig files.
 /// A Kubernetes cluster configuration
 pub const Cluster = struct {
     name: []const u8,
@@ -120,13 +120,18 @@ pub const Kubeconfig = struct {
                 const cluster_obj = cluster_item.object;
                 const cluster_data = cluster_obj.get("cluster").?.object;
 
+                // Try certificate-authority-data first (inline base64), then certificate-authority (file path)
+                const ca_data = if (cluster_data.get("certificate-authority-data")) |ca|
+                    try allocator.dupe(u8, ca.string)
+                else if (cluster_data.get("certificate-authority")) |ca_file|
+                    try readAndEncodeCertFile(allocator, ca_file.string)
+                else
+                    null;
+
                 try clusters.append(allocator, .{
                     .name = try allocator.dupe(u8, cluster_obj.get("name").?.string),
                     .server = try allocator.dupe(u8, cluster_data.get("server").?.string),
-                    .certificate_authority_data = if (cluster_data.get("certificate-authority-data")) |ca|
-                        try allocator.dupe(u8, ca.string)
-                    else
-                        null,
+                    .certificate_authority_data = ca_data,
                     .insecure_skip_tls_verify = if (cluster_data.get("insecure-skip-tls-verify")) |skip|
                         skip.bool
                     else
@@ -147,20 +152,30 @@ pub const Kubeconfig = struct {
                 const user_obj = user_item.object;
                 const user_data = user_obj.get("user").?.object;
 
+                // Try client-certificate-data first (inline base64), then client-certificate (file path)
+                const cert_data = if (user_data.get("client-certificate-data")) |c|
+                    try allocator.dupe(u8, c.string)
+                else if (user_data.get("client-certificate")) |cert_file|
+                    try readAndEncodeCertFile(allocator, cert_file.string)
+                else
+                    null;
+
+                // Try client-key-data first (inline base64), then client-key (file path)
+                const key_data = if (user_data.get("client-key-data")) |k|
+                    try allocator.dupe(u8, k.string)
+                else if (user_data.get("client-key")) |key_file|
+                    try readAndEncodeCertFile(allocator, key_file.string)
+                else
+                    null;
+
                 try users.append(allocator, .{
                     .name = try allocator.dupe(u8, user_obj.get("name").?.string),
                     .token = if (user_data.get("token")) |t|
                         try allocator.dupe(u8, t.string)
                     else
                         null,
-                    .client_certificate_data = if (user_data.get("client-certificate-data")) |c|
-                        try allocator.dupe(u8, c.string)
-                    else
-                        null,
-                    .client_key_data = if (user_data.get("client-key-data")) |k|
-                        try allocator.dupe(u8, k.string)
-                    else
-                        null,
+                    .client_certificate_data = cert_data,
+                    .client_key_data = key_data,
                     .username = if (user_data.get("username")) |u|
                         try allocator.dupe(u8, u.string)
                     else
@@ -200,6 +215,204 @@ pub const Kubeconfig = struct {
         // Get current context
         const current_context = if (root.get("current-context")) |ctx|
             try allocator.dupe(u8, ctx.string)
+        else
+            null;
+
+        return Kubeconfig{
+            .allocator = allocator,
+            .clusters = try clusters.toOwnedSlice(allocator),
+            .users = try users.toOwnedSlice(allocator),
+            .contexts = try contexts.toOwnedSlice(allocator),
+            .current_context = current_context,
+        };
+    }
+
+    /// Load kubeconfig from a YAML file
+    ///
+    /// This is the preferred method for loading standard kubeconfig files.
+    pub fn fromYamlFile(allocator: std.mem.Allocator, path: []const u8) !Kubeconfig {
+        var parsed = try yaml.parseFromFile(allocator, path);
+        defer parsed.deinit();
+
+        return try fromYaml(allocator, &parsed.value);
+    }
+
+    /// Helper function to read a certificate file and encode it as base64
+    fn readAndEncodeCertFile(allocator: std.mem.Allocator, file_path: []const u8) ![]const u8 {
+        const file = try std.fs.openFileAbsolute(file_path, .{});
+        defer file.close();
+
+        const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024); // 10MB max
+        defer allocator.free(content);
+
+        // Encode to base64
+        const encoder = std.base64.standard.Encoder;
+        const encoded_len = encoder.calcSize(content.len);
+        const encoded = try allocator.alloc(u8, encoded_len);
+        _ = encoder.encode(encoded, content);
+
+        return encoded;
+    }
+
+    /// Parse kubeconfig from YAML content
+    pub fn fromYaml(allocator: std.mem.Allocator, yaml_value: *yaml.Value) !Kubeconfig {
+        var root = yaml_value.asMapping() orelse return error.InvalidFormat;
+
+        // Parse clusters
+        var clusters: std.ArrayList(Cluster) = .{};
+        errdefer {
+            for (clusters.items) |*c| c.deinit(allocator);
+            clusters.deinit(allocator);
+        }
+
+        if (root.get("clusters")) |clusters_value_const| {
+            var clusters_value_mut = clusters_value_const;
+            const clusters_seq = clusters_value_mut.asSequence() orelse return error.InvalidFormat;
+
+            for (clusters_seq.items) |*cluster_item| {
+                var cluster_obj = cluster_item.asMapping() orelse continue;
+
+                const name = if (cluster_obj.get("name")) |n|
+                    n.asString() orelse continue
+                else
+                    continue;
+
+                if (cluster_obj.get("cluster")) |cluster_data_const| {
+                    var cluster_data_mut = cluster_data_const;
+                    var cluster_map = cluster_data_mut.asMapping() orelse continue;
+
+                    const server = if (cluster_map.get("server")) |s|
+                        s.asString() orelse continue
+                    else
+                        continue;
+
+                    // Try certificate-authority-data first (inline base64), then certificate-authority (file path)
+                    const ca_data = if (cluster_map.get("certificate-authority-data")) |ca|
+                        if (ca.asString()) |s| try allocator.dupe(u8, s) else null
+                    else if (cluster_map.get("certificate-authority")) |ca_file|
+                        if (ca_file.asString()) |path| try readAndEncodeCertFile(allocator, path) else null
+                    else
+                        null;
+
+                    const insecure = if (cluster_map.get("insecure-skip-tls-verify")) |skip|
+                        skip.asBool() orelse false
+                    else
+                        false;
+
+                    try clusters.append(allocator, .{
+                        .name = try allocator.dupe(u8, name),
+                        .server = try allocator.dupe(u8, server),
+                        .certificate_authority_data = ca_data,
+                        .insecure_skip_tls_verify = insecure,
+                    });
+                }
+            }
+        }
+
+        // Parse users
+        var users: std.ArrayList(User) = .{};
+        errdefer {
+            for (users.items) |*u| u.deinit(allocator);
+            users.deinit(allocator);
+        }
+
+        if (root.get("users")) |users_value_const| {
+            var users_value_mut = users_value_const;
+            const users_seq = users_value_mut.asSequence() orelse return error.InvalidFormat;
+
+            for (users_seq.items) |*user_item| {
+                var user_obj = user_item.asMapping() orelse continue;
+
+                const name = if (user_obj.get("name")) |n|
+                    n.asString() orelse continue
+                else
+                    continue;
+
+                if (user_obj.get("user")) |user_data_const| {
+                    var user_data_mut = user_data_const;
+                    var user_map = user_data_mut.asMapping() orelse continue;
+
+                    const token = if (user_map.get("token")) |t| t.asString() else null;
+
+                    // Try client-certificate-data first (inline base64), then client-certificate (file path)
+                    const cert_data = if (user_map.get("client-certificate-data")) |c|
+                        if (c.asString()) |s| try allocator.dupe(u8, s) else null
+                    else if (user_map.get("client-certificate")) |cert_file|
+                        if (cert_file.asString()) |path| try readAndEncodeCertFile(allocator, path) else null
+                    else
+                        null;
+
+                    // Try client-key-data first (inline base64), then client-key (file path)
+                    const key_data = if (user_map.get("client-key-data")) |k|
+                        if (k.asString()) |s| try allocator.dupe(u8, s) else null
+                    else if (user_map.get("client-key")) |key_file|
+                        if (key_file.asString()) |path| try readAndEncodeCertFile(allocator, path) else null
+                    else
+                        null;
+
+                    const username = if (user_map.get("username")) |u| u.asString() else null;
+                    const password = if (user_map.get("password")) |p| p.asString() else null;
+
+                    try users.append(allocator, .{
+                        .name = try allocator.dupe(u8, name),
+                        .token = if (token) |t| try allocator.dupe(u8, t) else null,
+                        .client_certificate_data = cert_data,
+                        .client_key_data = key_data,
+                        .username = if (username) |u| try allocator.dupe(u8, u) else null,
+                        .password = if (password) |p| try allocator.dupe(u8, p) else null,
+                    });
+                }
+            }
+        }
+
+        // Parse contexts
+        var contexts: std.ArrayList(Context) = .{};
+        errdefer {
+            for (contexts.items) |*c| c.deinit(allocator);
+            contexts.deinit(allocator);
+        }
+
+        if (root.get("contexts")) |contexts_value_const| {
+            var contexts_value_mut = contexts_value_const;
+            const contexts_seq = contexts_value_mut.asSequence() orelse return error.InvalidFormat;
+
+            for (contexts_seq.items) |*context_item| {
+                var context_obj = context_item.asMapping() orelse continue;
+
+                const name = if (context_obj.get("name")) |n|
+                    n.asString() orelse continue
+                else
+                    continue;
+
+                if (context_obj.get("context")) |context_data_const| {
+                    var context_data_mut = context_data_const;
+                    var context_map = context_data_mut.asMapping() orelse continue;
+
+                    const cluster = if (context_map.get("cluster")) |c|
+                        c.asString() orelse continue
+                    else
+                        continue;
+
+                    const user = if (context_map.get("user")) |u|
+                        u.asString() orelse continue
+                    else
+                        continue;
+
+                    const namespace = if (context_map.get("namespace")) |ns| ns.asString() else null;
+
+                    try contexts.append(allocator, .{
+                        .name = try allocator.dupe(u8, name),
+                        .cluster = try allocator.dupe(u8, cluster),
+                        .user = try allocator.dupe(u8, user),
+                        .namespace = if (namespace) |ns| try allocator.dupe(u8, ns) else null,
+                    });
+                }
+            }
+        }
+
+        // Get current context
+        const current_context = if (root.get("current-context")) |ctx|
+            if (ctx.asString()) |s| try allocator.dupe(u8, s) else null
         else
             null;
 

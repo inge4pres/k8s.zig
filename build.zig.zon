@@ -3,12 +3,16 @@
     .version = "0.0.1",
     .dependencies = .{
         .protobuf = .{
-            .url = "git+https://github.com/Arwalk/zig-protobuf?ref=v3.0.1#699ceca5117bbe6b3c11017a3f21a3783f25fa6e",
-            .hash = "protobuf-3.0.0-0e82aqDhJwD5l0ZV3WJ9tcRS0v5SD8ofIQa3mYJQzeor",
+            .url = "git+https://github.com/Arwalk/zig-protobuf?ref=master#0c69509ffd2a9ca4448977fcbd94ad5217b3df8e",
+            .hash = "protobuf-3.0.0-0e82anPRKADr_h_KCVG8ZMCa5fVi4KRpk_e6RH-SnG-k",
         },
         .tls = .{
             .url = "git+https://github.com/ianic/tls.zig#9d56751c99267075908c63a8a91ffc1e7f252df4",
             .hash = "tls-0.1.0-ER2e0gNoBQBLuvbg_hPuGQYoCVsn-kHDuupr0hsapu4P",
+        },
+        .yaml = .{
+            .url = "git+https://github.com/inge4pres/yaml.zig?ref=v0.1.1#b91a1b52e52fe8d848d85cdf652953e7634f6b73",
+            .hash = "yaml-0.0.1-FDJq8pAMAgCoOqnqHbERZDY04Let4dc63CbXODjsnOkd",
         },
     },
     .minimum_zig_version = "0.15.1",

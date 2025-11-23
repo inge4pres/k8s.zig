@@ -17,6 +17,12 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    // Import yaml dependency
+    const yaml_dep = b.dependency("yaml", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Create module for external use
     const k8s_module = b.addModule("k8s", .{
         .root_source_file = b.path("src/lib.zig"),
@@ -29,6 +35,9 @@ pub fn build(b: *std.Build) !void {
 
     // Add tls module to k8s module
     k8s_module.addImport("tls", tls_dep.module("tls"));
+
+    // Add yaml module to k8s module
+    k8s_module.addImport("yaml", yaml_dep.module("yaml"));
 
     // Create the k8s.zig static library
     const lib = b.addLibrary(.{
@@ -176,4 +185,53 @@ pub fn build(b: *std.Build) !void {
     const run_tls_test = b.addRunArtifact(tls_test);
     const run_tls_step = b.step("run-tls-test", "Run TLS test with minikube");
     run_tls_step.dependOn(&run_tls_test.step);
+
+    // YAML kubeconfig test
+    const yaml_test_module = b.createModule(.{
+        .root_source_file = b.path("test_yaml_kubeconfig.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Add yaml module to the test
+    yaml_test_module.addImport("yaml", yaml_dep.module("yaml"));
+
+    const yaml_test = b.addExecutable(.{
+        .name = "test_yaml_kubeconfig",
+        .root_module = yaml_test_module,
+    });
+
+    const install_yaml_test = b.addInstallArtifact(yaml_test, .{});
+
+    const yaml_test_step = b.step("test-yaml", "Build and run YAML kubeconfig test");
+    yaml_test_step.dependOn(&install_yaml_test.step);
+
+    const run_yaml_test = b.addRunArtifact(yaml_test);
+    const run_yaml_step = b.step("run-yaml-test", "Run YAML kubeconfig parsing test");
+    run_yaml_step.dependOn(&run_yaml_test.step);
+
+    // YAML integration test with full k8s library
+    const yaml_integration_module = b.createModule(.{
+        .root_source_file = b.path("test_yaml_integration.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Add k8s and yaml modules to the test
+    yaml_integration_module.addImport("k8s", k8s_module);
+    yaml_integration_module.addImport("yaml", yaml_dep.module("yaml"));
+
+    const yaml_integration_test = b.addExecutable(.{
+        .name = "test_yaml_integration",
+        .root_module = yaml_integration_module,
+    });
+
+    const install_yaml_integration = b.addInstallArtifact(yaml_integration_test, .{});
+
+    const yaml_integration_step = b.step("test-yaml-integration", "Build and run YAML integration test");
+    yaml_integration_step.dependOn(&install_yaml_integration.step);
+
+    const run_yaml_integration = b.addRunArtifact(yaml_integration_test);
+    const run_yaml_integration_step = b.step("run-yaml-integration", "Run YAML integration test");
+    run_yaml_integration_step.dependOn(&run_yaml_integration.step);
 }

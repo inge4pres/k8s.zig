@@ -253,7 +253,18 @@ fn fromConfig(config: *const Config) !Client {
     return client;
 }
 
-/// Create a Kubernetes client from a kubeconfig file using the current context
+/// Create a Kubernetes client from a kubeconfig YAML file using the current context
+///
+/// This is the preferred method for loading from standard kubeconfig files.
+pub fn fromKubeconfigFile(allocator: std.mem.Allocator, path: []const u8) !Client {
+    var config = try Config.fromKubeconfigFile(allocator, path);
+    defer config.deinit();
+
+    // fromConfig will duplicate the strings it needs, so we can safely free the config
+    return fromConfig(&config);
+}
+
+/// Create a Kubernetes client from a kubeconfig JSON file using the current context
 pub fn fromKubeconfigJSONFile(allocator: std.mem.Allocator, path: []const u8) !Client {
     var config = try Config.fromKubeconfigJSONFile(allocator, path);
     defer config.deinit();
