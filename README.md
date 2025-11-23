@@ -7,11 +7,16 @@ A native Zig client library for Kubernetes using protobuf-based API communicatio
 ### Implemented ✅
 - Type-safe Kubernetes API client
 - HTTP/HTTPS communication with TLS support
-- Kubeconfig file parsing (JSON format)
+- **Kubeconfig file parsing (YAML and JSON formats)**
+  - Inline certificate data (`certificate-authority-data`, `client-certificate-data`, `client-key-data`)
+  - File path references (`certificate-authority`, `client-certificate`, `client-key`)
+  - Automatic base64 encoding/decoding with whitespace handling
+  - Multiple context support
 - Certificate-based authentication (client cert + key)
 - Bearer token authentication
+- In-cluster authentication (service account)
 - HTTP chunked transfer encoding support
-- CRUD operations (Create, Read, Update, Delete)
+- CRUD operations (Create, Read, Update, Delete, Patch)
 - API path builder for core and grouped resources
 - Generated Zig types from Kubernetes protobuf definitions
 - Support for core/v1, apps/v1, and batch/v1 resources
@@ -22,9 +27,8 @@ A native Zig client library for Kubernetes using protobuf-based API communicatio
 - Hybrid approach recommended: raw JSON for API calls + std.json for parsing
 
 ### Planned 🚧
-- In-cluster authentication (service account)
 - Watch functionality for real-time updates
-- Patch operations (strategic merge, JSON patch)
+- Strategic merge patch and JSON merge patch
 - Label and field selectors
 - More API group support (networking, rbac, policy, etc.)
 - Robust protobuf deserialization for all Kubernetes response types
@@ -67,21 +71,20 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Load client from kubeconfig
-    var client = try k8s.Client.fromKubeconfigJSONFile(allocator, "/home/user/.kube/config.json");
+    // Load client from YAML kubeconfig (standard ~/.kube/config format)
+    var client = try k8s.Client.fromKubeconfigFile(allocator, "/home/user/.kube/config");
     defer client.deinit();
 
-    // List pods in a namespace
-    const path = try std.fmt.allocPrint(allocator, "{s}/api/v1/namespaces/default/pods", .{client.base_url});
-    defer allocator.free(path);
-
-    var response = try client.get(path, .json);
+    // List pods in the default namespace
+    var response = try client.listPods("default");
     defer response.deinit();
 
     std.debug.print("Status: {}\n", .{response.status});
     std.debug.print("Pods: {s}\n", .{response.body});
 }
 ```
+
+The library supports both YAML and JSON kubeconfig formats, and handles both inline certificate data and file path references automatically.
 
 ### Manual Configuration
 
@@ -140,20 +143,34 @@ k8s.zig/
 ### Client
 
 ```zig
-// Create a client from kubeconfig
+// Create a client from YAML kubeconfig (recommended)
+var client = try k8s.Client.fromKubeconfigFile(allocator, kubeconfig_path);
+defer client.deinit();
+
+// Or from JSON kubeconfig
 var client = try k8s.Client.fromKubeconfigJSONFile(allocator, kubeconfig_path);
 defer client.deinit();
 
-// Or create manually
-var client = try k8s.Client.init(allocator, base_url);
+// Or create manually with TLS options
+var client = try k8s.Client.init(allocator, base_url, .{
+    .certificate_authority_data = ca_cert_base64,
+    .client_certificate_data = client_cert_base64,
+    .client_key_data = client_key_base64,
+});
 defer client.deinit();
 client.setAuthToken(token);
-try client.setClientCert(cert_pem, key_pem);
 
-// CRUD operations
+// Convenience methods for common resources
+var response = try client.listPods("namespace");
+var response = try client.getPod("namespace", "pod-name");
+var response = try client.listDeployments("namespace");
+var response = try client.getDeployment("namespace", "deployment-name");
+
+// Generic CRUD operations
 var response = try client.get(path, .json);
 var response = try client.create(path, body, .json);
 var response = try client.update(path, body, .json);
+var response = try client.patch(path, body, .json);
 var response = try client.delete(path, .json);
 ```
 
