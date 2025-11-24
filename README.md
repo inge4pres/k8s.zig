@@ -237,4 +237,4 @@ Contributions are welcome! Please see [ROADMAP.md](ROADMAP.md) for planned featu
 
 ## License
 
-TBD
+MIT
